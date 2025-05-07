@@ -7,10 +7,11 @@ import { LiaUserEditSolid } from 'react-icons/lia';
 import { GoTrash } from 'react-icons/go';
 import { Button } from 'primereact/button';
 import { Dialog } from 'primereact/dialog'; // Import Dialog
-import { Toast } from 'primereact/toast'; // Import Toast
 import { useAxios } from '../../contexts/AxiosContext';
 // import axios from 'axios'; // Marked as unused (using axiosInstance now)
 import { BiPrinter } from 'react-icons/bi';
+import convertUTCToTimeZone from '../../utils/convertUTCToTimeZone'
+import leadingZero from '../../utils/leadingZero';
 
 export default function PatientTriage() {
   const axiosInstance = useAxios();
@@ -23,6 +24,8 @@ export default function PatientTriage() {
   const [printQueueNumber, setPrintQueueNumber] = useState(''); // Store number for reprint
   const [printErrorMsg, setPrintErrorMsg] = useState(''); // Store error message for dialog
   const toast = useRef(null); // Ref for Toast component
+
+  const [staffs, setStaffs] = useState();
 
   const [filters, setFilters] = useState({
     priority: 'all',
@@ -54,12 +57,13 @@ export default function PatientTriage() {
   
   // FIX: Accept rowData as the parameter
   const customActions = (rowData) => {
-    return <div className='flex gap-4 justify-end'>
+    return <div className='flex justify-end'>
       <Button
         rounded
+        size='small'
         icon={<BiPrinter />}
-        className='text-green-500 border border-green-500 bg-green-100'
-        tooltip='Reprint Priority Number'
+        className='text-green-500 ring-0'
+        tooltip='Print Priority Number'
         data-pr-position='top'
         // Now rowData is correctly defined in this scope
         onClick={() => handlePrint(rowData.priority + rowData.priority_number.toString().padStart(2, '0'))}
@@ -67,7 +71,7 @@ export default function PatientTriage() {
       <Button
         rounded
         icon={<LiaUserEditSolid />}
-        className='text-blue-500 border border-blue-500 bg-blue-100'
+        className='text-blue-500 ring-0'
         tooltip='Edit Patient'
         data-pr-position='top'
         // Use rowData here as well for consistency
@@ -76,7 +80,7 @@ export default function PatientTriage() {
       <Button
         rounded
         icon={<GoTrash />}
-        className='text-red-500 border border-red-500 bg-red-100'
+        className='text-red-500 ring-0'
         tooltip='Delete User'
         data-pr-position='top'
       />
@@ -85,11 +89,13 @@ export default function PatientTriage() {
 
   const getData = async () => {
     try {
-      const [cardTotalsResponse] = await Promise.all([
-        axiosInstance.get("/patients/card-totals")
+      const [cardTotalsResponse, staffsResponse] = await Promise.all([
+        axiosInstance.get("/patients/card-totals"),
+        axiosInstance.get('/users/get/staff')
       ]);
 
       setCardTotals(cardTotalsResponse.data);
+      setStaffs(staffsResponse.data)
     } catch (error) {
       console.error("Error fetching data:", error);
     }
@@ -148,11 +154,13 @@ export default function PatientTriage() {
       // Basic ESC/POS Commands (Adjust as needed for your printer)
       const encoder = new TextEncoder();
       const initPrinter = new Uint8Array([0x1B, 0x40]); // ESC @ - Initialize printer
-      const setLargeFont = new Uint8Array([0x1D, 0x21, 0x33]); // GS ! 0x33 = Quad size (double width & height x2)
+      const setLargeFont = new Uint8Array([0x1D, 0x21, 0x11]); // GS ! 0x33 = Quad size (double width & height x2)
       const setCenter = new Uint8Array([0x1B, 0x61, 0x01]); // ESC a 1 - Center align
-      const printText = encoder.encode(`\n\n\n\n\n${queueNum}\n`);
+      // Ensure only the queue number is printed
+      const formattedQueueNum = queueNum.toString();
+      const printText = encoder.encode(`\n\n${formattedQueueNum}\n`);
       const setNormalFont = new Uint8Array([0x1B, 0x21, 0x00]); // ESC ! 0 - Normal font
-      const printTimestamp = encoder.encode(`${new Date().toLocaleString()}\n\n\n\n\n`);
+      const printTimestamp = encoder.encode(`${new Date().toLocaleString()}\n\n`);
       const cutPaper = new Uint8Array([0x1D, 0x56, 0x42, 0x00]); // GS V B 0 - Full cut (or 0x01 for partial)
 
       const dataToSend = new Uint8Array([
@@ -225,10 +233,8 @@ export default function PatientTriage() {
 
   return (
     <> {/* Wrap in Fragment to include Toast and Dialog */}
-      <Toast ref={toast} />
-      <div className="p-6 mx-auto bg-white">
-        {/* Header */}
-        <div className="flex justify-between items-center mb-6">
+      <div className="p-6">
+        <div className="w-full flex justify-between items-center mb-6">
           <div>
             <h1 className="text-2xl font-bold text-gray-900">Patient Triage</h1>
             <p className="text-gray-600">Manage incoming patients and assess priority</p>
@@ -243,7 +249,7 @@ export default function PatientTriage() {
         </div>
 
         {/* Stats Overview */}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
           {/* ... stats cards ... */}
            <div className="bg-white p-4 rounded-lg shadow-md border border-gray-200">
               <div className="flex items-center gap-3">
@@ -292,7 +298,7 @@ export default function PatientTriage() {
         </div>
 
         {/* Filters */}
-        <div className="bg-white p-4 rounded-lg shadow-md border border-gray-200 mb-6">
+        <div className="hidden bg-white p-4 rounded-lg shadow-md border border-gray-200 mb-6">
            <div className="flex gap-4">
              <div>
                <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -336,11 +342,12 @@ export default function PatientTriage() {
           selectionMode=""
           api={'/patients'}
           columns={[
-            {field: 'priority_number', header: 'Patient ID', hasTemplate: true, template: (data, rowData) => {
+            {field: 'priority_number', header: 'ID', hasTemplate: true, template: (data, rowData) => {
               return <div className="flex flex-col items-start">
-                <div className="text-sm">{rowData.priority}{rowData.priority_number.toString().padStart(2, '0')}</div>
+                <div>{rowData.priority}{leadingZero(rowData.priority_number || 0)}</div>
               </div>
             }},
+            {field: 'created_at', header: 'Date Created', headerClassname: "text-xs", hasTemplate: true, template: (data) => { return convertUTCToTimeZone(data, "MMM DD, YYYY hh:mm A") }},
             {field: 'name', header: 'Name', headerClassname: "text-xs"},
             {field: 'priority', header: 'Priority', hasTemplate: true, template: (data) => {
               const priority = data == "P" ? "Urgent" : (data == "in-progress" ? "Senior/Pwd" : "Regular") // Note: "in-progress" check seems wrong here for priority
@@ -355,6 +362,7 @@ export default function PatientTriage() {
               </span>
             }},
             {field: 'assigned_to.name', header: 'Assigned To'},
+            {field: 'assigned_to.department.name', header: 'Department'},
           ]}
           actions={true}
           customActions={customActions}
@@ -369,6 +377,7 @@ export default function PatientTriage() {
             }
           }}
           onHide={() => {setShowNewPatientForm(false); setSelectedPatient(null)}}
+          staffs={staffs}
         />
 
         {/* *** ADDED: Print Error Dialog *** */}
